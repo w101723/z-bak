@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Temporary downloads and notes
+downloads/
+release_notes.md
+*.part
+
+# OS artifacts
+.DS_Store
+Thumbs.db

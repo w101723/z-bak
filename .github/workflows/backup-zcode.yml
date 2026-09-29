@@ -1,0 +1,91 @@
+name: Daily Backup ZCode Releases
+
+on:
+  schedule:
+    # 每天 UTC 01:00 (北京时间 09:00) 自动检查
+    - cron: '0 1 * * *'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '手动指定备份的 ZCode 版本 (留空则自动检测官方最新版本，例如 3.14.4)'
+        required: false
+        type: string
+        default: ''
+      force:
+        description: '强制重新备份 (若 Release 已存在也重新下载并覆盖)'
+        required: false
+        type: boolean
+        default: false
+      dry_run:
+        description: '演练模式 (仅探测版本和生成说明，不下载安装包和发布 Release)'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: backup-zcode
+  cancel-in-progress: false
+
+jobs:
+  check-and-backup:
+    name: Check & Backup ZCode
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Check and Download Assets
+        id: check_and_download
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ARGS=()
+          ARGS+=(--repo "${{ github.repository }}")
+          ARGS+=(--token "${{ secrets.GITHUB_TOKEN }}")
+
+          if [ -n "${{ inputs.version }}" ]; then
+            ARGS+=(--version "${{ inputs.version }}")
+          fi
+
+          if [ "${{ inputs.force }}" = "true" ]; then
+            ARGS+=(--force)
+          fi
+
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            ARGS+=(--dry-run)
+          fi
+
+          python3 scripts/backup_zcode.py "${ARGS[@]}"
+
+      - name: Publish to GitHub Releases
+        if: steps.check_and_download.outputs.need_backup == 'true' && inputs.dry_run != true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.check_and_download.outputs.tag }}"
+          TITLE="ZCode v${{ steps.check_and_download.outputs.version }}"
+
+          echo "Publishing release for $TAG ($TITLE)..."
+
+          # 检查 Release 是否已经存在（如强制重新备份情况）
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists. Updating notes and clobbering assets..."
+            gh release edit "$TAG" --title "$TITLE" --notes-file ./release_notes.md
+            gh release upload "$TAG" ./downloads/* --clobber
+          else
+            echo "Creating new release $TAG..."
+            gh release create "$TAG" ./downloads/* \
+              --title "$TITLE" \
+              --notes-file ./release_notes.md
+          fi
+
+          echo "Release $TAG published successfully!"
